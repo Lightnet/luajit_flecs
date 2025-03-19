@@ -7,4 +7,4 @@
 
   To filter out the casting type to access struct from c to lua and lua to c to deal with update component data.
 
-  There are limited on ffi which LuaJIT has. Not much docs.
+  There are limited on ffi which LuaJIT has. Not much docs. Examples. 
