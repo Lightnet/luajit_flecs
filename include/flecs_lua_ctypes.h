@@ -5,25 +5,46 @@
 #include "lua.h"
 #include "lauxlib.h"
 #include <stdio.h>
+#include <string.h>
+#include <flecs.h>
 
-// Structure for l_point_t (must match Lua's ffi.cdef)
+// Structure definitions
 typedef struct {
     double x;
     double y;
 } l_point_t;
 
+typedef struct {
+    float vx;
+    float vy;
+} l_velocity_t;
+
+// Component type descriptor
+typedef struct {
+    const char *name;
+    size_t size;
+    size_t alignment;
+} FlecsComponentType;
+
+// Registry of known component types (terminated by {NULL, 0, 0})
+static const FlecsComponentType flecs_component_types[] = {
+    {"l_point_t", sizeof(l_point_t), ECS_ALIGNOF(l_point_t)},
+    {"l_velocity_t", sizeof(l_velocity_t), ECS_ALIGNOF(l_velocity_t)},
+    {NULL, 0, 0}
+};
+
+// Lookup a component type by name
+static const FlecsComponentType *flecs_lua_get_component_type(const char *type_name) {
+    for (int i = 0; flecs_component_types[i].name != NULL; i++) {
+        if (strcmp(flecs_component_types[i].name, type_name) == 0) {
+            return &flecs_component_types[i];
+        }
+    }
+    return NULL;
+}
+
 typedef void * (*FlecsLuaCDataExtractor)(lua_State *L, int arg_idx, const char *type_name, size_t size, void *buffer, const char *func_name);
 
-/**
- * Extracts a C struct from a LuaJIT FFI cdata object into a provided buffer.
- * @param L Lua state.
- * @param arg_idx Stack index of the cdata argument.
- * @param type_name FFI type name (e.g., "l_point_t*").
- * @param size Size of the struct in bytes.
- * @param buffer Caller-provided buffer to store the extracted data.
- * @param func_name Name of the calling function for debug logging.
- * @return Pointer to the filled buffer, or NULL on error.
- */
 static void *flecs_lua_extract_cdata(lua_State *L, int arg_idx, const char *type_name, size_t size, void *buffer, const char *func_name) {
     int type = lua_type(L, arg_idx);
     const char *lua_type_name = lua_typename(L, type);
@@ -59,7 +80,7 @@ static void *flecs_lua_extract_cdata(lua_State *L, int arg_idx, const char *type
     lua_pop(L, 1);
 
     lua_getfield(L, -2, "copy");
-    lua_pushlightuserdata(L, buffer); // Use provided buffer
+    lua_pushlightuserdata(L, buffer);
     lua_pushvalue(L, -3);
     lua_pushinteger(L, size);
     if (lua_pcall(L, 3, 0, 0) != LUA_OK) {
@@ -73,11 +94,6 @@ static void *flecs_lua_extract_cdata(lua_State *L, int arg_idx, const char *type
     return buffer;
 }
 
-/**
- * Registers FFI type definitions with LuaJIT.
- * @param L Lua state.
- * @return 0 on success, 1 on failure.
- */
 static int flecs_lua_register_ctypes(lua_State *L) {
     lua_getglobal(L, "ffi");
     if (!lua_istable(L, -1)) {
@@ -87,13 +103,14 @@ static int flecs_lua_register_ctypes(lua_State *L) {
     }
 
     lua_getfield(L, -1, "cdef");
-    lua_pushstring(L, "struct l_point_t { double x, y; }; typedef struct l_point_t l_point_t;");
+    lua_pushstring(L, "struct l_point_t { double x, y; }; typedef struct l_point_t l_point_t;"
+                     "struct l_velocity_t { float vx, vy; }; typedef struct l_velocity_t l_velocity_t;");
     if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-        printf("Debug Error: Failed to define l_point_t: %s\n", lua_tostring(L, -1));
+        printf("Debug Error: Failed to define ctypes: %s\n", lua_tostring(L, -1));
         lua_pop(L, 2);
         return 1;
     }
-    printf("l_point_t defined via ffi.cdef in C\n");
+    printf("l_point_t and l_velocity_t defined via ffi.cdef in C\n");
 
     lua_pop(L, 1);
     return 0;
