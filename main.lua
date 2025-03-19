@@ -1,43 +1,73 @@
 print("Running main.lua from embedded LuaJIT 2.1!")
 
--- Test Flecs integration
 local flecs = require "flecs"
 print("Flecs module loaded:", flecs)
 
--- Load FFI
 local ffi = require("ffi")
 print("FFI loaded:", ffi)
 
--- Test the type
-local test_point = ffi.new("l_point_t")
-print("Test l_point_t:", tostring(test_point))
+local function set_component(world, entity, type_name, data)
+  local cdata = ffi.new(type_name)
+  if type(data) == "table" then
+      if #data > 0 then -- Positional table
+          if type_name == "l_point_t" and #data == 2 then
+              cdata.x = data[1]
+              cdata.y = data[2]
+          elseif type_name == "l_velocity_t" and #data == 2 then
+              cdata.vx = data[1]
+              cdata.vy = data[2]
+          else
+              error("Invalid positional table size for " .. type_name)
+          end
+      else -- Named fields
+          for k, v in pairs(data) do
+              if cdata[k] ~= nil then -- Check if field exists
+                  cdata[k] = v
+              else
+                  error("Unknown field '" .. k .. "' for " .. type_name)
+              end
+          end
+      end
+  end
+  flecs.lua_ecs_set(world, entity, type_name, cdata)
+end
 
--- Create a new Flecs world
 local world = flecs.new_world()
 print("Flecs world created:", world)
 
--- Register l_point_t with a default instance
-flecs.lua_ecs_component_init(world, ffi.new("l_point_t"))
+flecs.lua_ecs_component_init_name(world, "l_point_t")
+flecs.lua_ecs_component_init_name(world, "l_velocity_t")
+flecs.lua_ecs_component_init_name(world, "l_acceleration_t")
 
--- Create an entity and set l_point_t
 local entity = flecs.new_entity(world)
-local lpos = ffi.new("l_point_t")
-lpos.x = 10
-lpos.y = 20
-flecs.lua_ecs_set(world, entity, lpos)
-print("Entity created and set with l_point_t:", entity)
 
--- Retrieve l_point_t
-local retrieved_point = flecs.lua_ecs_get(world, entity)
+-- Test both named and positional tables
+set_component(world, entity, "l_point_t", {x=10, y=20})
+print("Entity created and set with l_point_t (named):", entity)
+
+set_component(world, entity, "l_velocity_t", {1.5, 2.5})
+print("Entity set with l_velocity_t (positional):", entity)
+
+set_component(world, entity, "l_acceleration_t", {ax=0.5, ay=0.8})
+local retrieved_acc = flecs.lua_ecs_get(world, entity, "l_acceleration_t")
+if retrieved_acc then
+    print("Retrieved l_acceleration_t: ax =", retrieved_acc.ax, "ay =", retrieved_acc.ay)
+end
+
+local retrieved_point = flecs.lua_ecs_get(world, entity, "l_point_t")
 if retrieved_point then
     print("Retrieved l_point_t: x =", retrieved_point.x, "y =", retrieved_point.y)
 else
     print("Failed to retrieve l_point_t")
 end
 
--- Progress the world
-flecs.progress(world, 0.1)
+local retrieved_vel = flecs.lua_ecs_get(world, entity, "l_velocity_t")
+if retrieved_vel then
+    print("Retrieved l_velocity_t: vx =", retrieved_vel.vx, "vy =", retrieved_vel.vy)
+else
+    print("Failed to retrieve l_velocity_t")
+end
 
--- Clean up
+flecs.progress(world, 0.1)
 flecs.delete_world(world)
 print("Flecs world deleted")

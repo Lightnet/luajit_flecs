@@ -19,6 +19,11 @@ typedef struct {
     float vy;
 } l_velocity_t;
 
+typedef struct {
+  float ax;
+  float ay;
+} l_acceleration_t;
+
 // Component type descriptor
 typedef struct {
     const char *name;
@@ -26,11 +31,14 @@ typedef struct {
     size_t alignment;
 } FlecsComponentType;
 
+
+
 // Registry of known component types (terminated by {NULL, 0, 0})
 static const FlecsComponentType flecs_component_types[] = {
-    {"l_point_t", sizeof(l_point_t), ECS_ALIGNOF(l_point_t)},
-    {"l_velocity_t", sizeof(l_velocity_t), ECS_ALIGNOF(l_velocity_t)},
-    {NULL, 0, 0}
+  {"l_point_t", sizeof(l_point_t), ECS_ALIGNOF(l_point_t)},
+  {"l_velocity_t", sizeof(l_velocity_t), ECS_ALIGNOF(l_velocity_t)},
+  {"l_acceleration_t", sizeof(l_acceleration_t), ECS_ALIGNOF(l_acceleration_t)},
+  {NULL, 0, 0}
 };
 
 // Lookup a component type by name
@@ -103,8 +111,10 @@ static int flecs_lua_register_ctypes(lua_State *L) {
     }
 
     lua_getfield(L, -1, "cdef");
+    // In flecs_lua_register_ctypes
     lua_pushstring(L, "struct l_point_t { double x, y; }; typedef struct l_point_t l_point_t;"
-                     "struct l_velocity_t { float vx, vy; }; typedef struct l_velocity_t l_velocity_t;");
+                      "struct l_velocity_t { float vx, vy; }; typedef struct l_velocity_t l_velocity_t;"
+                      "struct l_acceleration_t { float ax, ay; }; typedef struct l_acceleration_t l_acceleration_t;");
     if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
         printf("Debug Error: Failed to define ctypes: %s\n", lua_tostring(L, -1));
         lua_pop(L, 2);
