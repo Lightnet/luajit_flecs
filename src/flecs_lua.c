@@ -2,12 +2,13 @@
 #include "lauxlib.h"
 #include "lualib.h"
 #include <stdio.h>
+#include "flecs_lua_ctypes.h"
 
 // Structure for l_point_t (must match Lua's ffi.cdef)
-typedef struct {
-    double x;
-    double y;
-} l_point_t;
+// typedef struct {
+//     double x;
+//     double y;
+// } l_point_t;
 
 // Metatable name for ecs_world_t
 #define ECS_WORLD_MT "ecs_world_t"
@@ -39,68 +40,16 @@ static int l_flecs_delete_world(lua_State *L) {
     return 0;
 }
 
-
 static int lua_ecs_component_init(lua_State *L) {
   ecs_world_t **world_ud = (ecs_world_t **)luaL_checkudata(L, 1, ECS_WORLD_MT);
   ecs_world_t *world = *world_ud;
 
-  // Log the raw type and type name
-  int type = lua_type(L, 2);
-  const char *type_name = lua_typename(L, type);
-  printf("ecs_component_init: arg type=%d, type_name=%s\n", type, type_name ? type_name : "nil");
-
-  // Check if the second argument is a cdata (FFI type)
-  if (type != 10) { // 10 is LuaJIT's cdata type ID
-      luaL_argerror(L, 2, "expected FFI cdata struct");
+  l_point_t point_buffer;
+  l_point_t *point = (l_point_t *)flecs_lua_extract_cdata(L, 2, "l_point_t*", sizeof(l_point_t), &point_buffer, "ecs_component_init");
+  if (!point) {
+      return luaL_error(L, "Failed to extract l_point_t cdata");
   }
 
-  // Debug: Inspect the original cdata
-  printf("Original cdata: ");
-  lua_getglobal(L, "tostring");
-  lua_pushvalue(L, 2);
-  lua_call(L, 1, 1);
-  printf("%s\n", lua_tostring(L, -1));
-  lua_pop(L, 1);
-
-  // Use ffi.cast to get the pointer
-  lua_getglobal(L, "ffi");
-  lua_getfield(L, -1, "cast");
-  lua_pushstring(L, "l_point_t*");
-  lua_pushvalue(L, 2); // The cdata argument
-  if (lua_pcall(L, 2, 1, 0) != LUA_OK) {
-      printf("FFI cast error: %s\n", lua_tostring(L, -1));
-      luaL_argerror(L, 2, "expected l_point_t FFI cdata struct");
-  }
-
-  // Debug: Inspect the casted result
-  printf("Casted cdata: ");
-  lua_getglobal(L, "tostring");
-  lua_pushvalue(L, -2);
-  lua_call(L, 1, 1);
-  printf("%s\n", lua_tostring(L, -1));
-  lua_pop(L, 1);
-
-  // Extract the pointer using ffi.copy or direct access
-  l_point_t point_data;
-  lua_getfield(L, -2, "copy");
-  lua_pushlightuserdata(L, &point_data); // Destination
-  lua_pushvalue(L, -3); // Source (casted cdata)
-  lua_pushinteger(L, sizeof(l_point_t));
-  if (lua_pcall(L, 3, 0, 0) != LUA_OK) {
-      printf("FFI copy error: %s\n", lua_tostring(L, -1));
-      luaL_argerror(L, 2, "failed to copy l_point_t data");
-  }
-  l_point_t *point = &point_data;
-
-  printf("Extracted pointer: %p\n", (void *)point);
-
-  // Clean up stack
-  lua_pop(L, 2); // Remove cast result and ffi table
-
-  // Log raw value for debugging
-  printf("Argument 2 raw value: %p\n", (void *)point);
-
-  // Check if the component is already registered
   ecs_entity_t existing_id = ecs_lookup(world, "l_point_t");
   if (existing_id != 0) {
       printf("Component 'l_point_t' already registered with ID: %llu\n", (unsigned long long)existing_id);
@@ -108,13 +57,10 @@ static int lua_ecs_component_init(lua_State *L) {
       printf("Registering new component 'l_point_t':\n");
   }
 
-  // Log type and name details
   printf("Component Name: l_point_t\n");
   printf("Type: l_point_t (size: %zu, alignment: %zu)\n", sizeof(l_point_t), ECS_ALIGNOF(l_point_t));
   printf("Sample values: x = %f, y = %f\n", point->x, point->y);
-  printf("Lua Type: %s\n", type_name);
 
-  // Register the component
   ecs_entity_t comp_id = ecs_component_init(world, &(ecs_component_desc_t){
       .entity = ecs_entity(world, {.name = "l_point_t"}),
       .type.size = sizeof(l_point_t),
@@ -128,40 +74,16 @@ static int lua_ecs_component_init(lua_State *L) {
 
 
 // Lua function: lua_ecs_set(world, entity, ffi_component)
-
 static int lua_ecs_set(lua_State *L) {
   ecs_world_t **world_ud = (ecs_world_t **)luaL_checkudata(L, 1, ECS_WORLD_MT);
   ecs_world_t *world = *world_ud;
   ecs_entity_t entity = luaL_checkinteger(L, 2);
 
-  if (lua_type(L, 3) != 10) { // Check for cdata
-      luaL_argerror(L, 3, "expected FFI cdata struct");
+  l_point_t point_buffer;
+  l_point_t *point = (l_point_t *)flecs_lua_extract_cdata(L, 3, "l_point_t*", sizeof(l_point_t), &point_buffer, "ecs_set");
+  if (!point) {
+      return luaL_error(L, "Failed to extract l_point_t cdata");
   }
-
-  // Use ffi.cast to get the pointer
-  lua_getglobal(L, "ffi");
-  lua_getfield(L, -1, "cast");
-  lua_pushstring(L, "l_point_t*");
-  lua_pushvalue(L, 3); // The cdata argument
-  if (lua_pcall(L, 2, 1, 0) != LUA_OK) {
-      printf("FFI cast error: %s\n", lua_tostring(L, -1));
-      luaL_argerror(L, 3, "expected l_point_t FFI cdata struct");
-  }
-
-  // Extract the data using ffi.copy
-  l_point_t point_data;
-  lua_getfield(L, -2, "copy");
-  lua_pushlightuserdata(L, &point_data); // Destination
-  lua_pushvalue(L, -3); // Source (casted cdata)
-  lua_pushinteger(L, sizeof(l_point_t));
-  if (lua_pcall(L, 3, 0, 0) != LUA_OK) {
-      printf("FFI copy error: %s\n", lua_tostring(L, -1));
-      luaL_argerror(L, 3, "failed to copy l_point_t data");
-  }
-  l_point_t *point = &point_data;
-
-  // Clean up stack
-  lua_pop(L, 2); // Remove cast result and ffi table
 
   lua_getfield(L, LUA_REGISTRYINDEX, "Lua_Point_ID");
   ecs_entity_t comp_id = lua_tointeger(L, -1);
@@ -174,6 +96,8 @@ static int lua_ecs_set(lua_State *L) {
   ecs_set_id(world, entity, comp_id, sizeof(l_point_t), point);
   return 0;
 }
+
+
 
 
 // Lua function: lua_ecs_get(world, entity)
@@ -198,7 +122,6 @@ static int lua_ecs_get(lua_State *L) {
   printf("Type: l_point_t (size: %zu, alignment: %zu)\n", sizeof(l_point_t), ECS_ALIGNOF(l_point_t));
   printf("Values: x = %f, y = %f\n", point->x, point->y);
 
-  // Create an FFI cdata instead of plain userdata
   lua_getglobal(L, "ffi");
   lua_getfield(L, -1, "new");
   lua_pushstring(L, "l_point_t");
@@ -207,21 +130,17 @@ static int lua_ecs_get(lua_State *L) {
       luaL_error(L, "failed to create l_point_t cdata");
   }
 
-  // Copy the retrieved data into the cdata
   lua_getglobal(L, "ffi");
   lua_getfield(L, -1, "copy");
-  lua_pushvalue(L, -3); // The new cdata
-  lua_pushlightuserdata(L, (void *)point); // Source (const l_point_t *)
+  lua_pushvalue(L, -3);
+  lua_pushlightuserdata(L, (void *)point);
   lua_pushinteger(L, sizeof(l_point_t));
   if (lua_pcall(L, 3, 0, 0) != LUA_OK) {
       printf("FFI copy error: %s\n", lua_tostring(L, -1));
       luaL_error(L, "failed to copy l_point_t data");
   }
 
-  // Clean up stack (leave only the cdata)
-  lua_pop(L, 1); // Remove ffi table
-  // cdata is now at the top of the stack
-
+  lua_pop(L, 1);
   return 1;
 }
 

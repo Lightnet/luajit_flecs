@@ -62,6 +62,7 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(SOURCES
     src/main.c
     src/flecs_lua.c
+    #flecs_lua_ctypes.h
 )
 
 # Add include directories
