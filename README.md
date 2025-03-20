@@ -10,3 +10,12 @@
   There are limited on ffi which LuaJIT has. Not much docs. Examples.
 
   After some thinking some time. It bloated. Well think of better methods.
+
+# Results:
+ * It take a while to do something light cide but more detail required c more coding.
+ * adding helpers but it add more bloat for type checks for components.
+ * required time to research for better code between lua and c for api.
+ * Flecs is a bit tricky to layers and args as it tricky.
+ * Doing some simple test build.
+ * Required Struct in c to lua api to work with check type or match handle struct.
+    * relate to lua metatable.

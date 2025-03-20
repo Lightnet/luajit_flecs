@@ -1,299 +1,219 @@
-#include "flecs_lua.h"
-#include "lauxlib.h"
-#include "lualib.h"
+#include "flecs_lua_comps.h"
 #include <stdio.h>
-#include "flecs_lua_ctypes.h"
 
-// Metatable name for ecs_world_t
-#define ECS_WORLD_MT "ecs_world_t"
+// Global variables
+static ecs_world_t *global_world = NULL;
+ecs_entity_t PositionId = 0;
+ecs_entity_t VelocityId = 0;
 
-#define DEBUG 1 // Set to 0 to disable debug output
+// Hard-coded move system
+static void move_sys(ecs_iter_t *it) {
+    // printf("move_sys called, entity count: %d\n", it->count);
+    Position *p = ecs_field(it, Position, 0);
+    Velocity *v = ecs_field(it, Velocity, 1);
 
-#ifdef DEBUG
-#define DEBUG_PRINT(...) printf(__VA_ARGS__)
-#else
-#define DEBUG_PRINT(...)
-#endif
+    // char *type_str = ecs_table_str(it->world, it->table);
+    // printf("Move entities with [%s]\n", type_str);
+    // ecs_os_free(type_str);
 
-
-
-// Lua function: flecs.new_world()
-static int l_flecs_new_world(lua_State *L) {
-    ecs_world_t *world = ecs_init();
-    ecs_world_t **world_ud = (ecs_world_t **)lua_newuserdata(L, sizeof(ecs_world_t *));
-    *world_ud = world;
-    luaL_getmetatable(L, ECS_WORLD_MT);
-    if (lua_isnil(L, -1)) {
-        lua_pop(L, 1);
-        luaL_newmetatable(L, ECS_WORLD_MT);
-        lua_pushstring(L, "__index");
-        lua_pushvalue(L, -2);
-        lua_settable(L, -3);
+    for (int i = 0; i < it->count; i++) {
+        p[i].x += v[i].x * it->delta_time;
+        p[i].y += v[i].y * it->delta_time;
+        // printf("Entity %llu: Pos (%.1f, %.1f) updated with Vel (%.1f, %.1f)\n",
+        //        (unsigned long long)it->entities[i], p[i].x, p[i].y, v[i].x, v[i].y);
     }
+}
+
+// Component helpers implementation
+void register_flecs_components(ecs_world_t *world) {
+  PositionId = ecs_component_init(world, &(ecs_component_desc_t){
+      .entity = ecs_entity(world, { .name = "Position" }),
+      .type.size = sizeof(Position),
+      .type.alignment = ECS_ALIGNOF(Position)
+  });
+  VelocityId = ecs_component_init(world, &(ecs_component_desc_t){
+      .entity = ecs_entity(world, { .name = "Velocity" }),
+      .type.size = sizeof(Velocity),
+      .type.alignment = ECS_ALIGNOF(Velocity)
+  });
+
+  ecs_system_desc_t sys_desc = {0};
+  sys_desc.entity = ecs_entity(world, { .name = "MoveSystem" });
+  ecs_add_id(world, sys_desc.entity, ecs_dependson(EcsOnUpdate));
+  sys_desc.query.terms[0].id = PositionId;
+  sys_desc.query.terms[1].id = VelocityId;
+  sys_desc.callback = move_sys;
+  ecs_system_init(world, &sys_desc);
+}
+
+int push_position(lua_State *L, Position *pos) {
+    lua_newtable(L);
+    lua_pushnumber(L, pos->x);
+    lua_setfield(L, -2, "x");
+    lua_pushnumber(L, pos->y);
+    lua_setfield(L, -2, "y");
+    
+    luaL_getmetatable(L, "Position");
     lua_setmetatable(L, -2);
     return 1;
 }
 
-// Lua function: flecs.delete_world(world)
-static int l_flecs_delete_world(lua_State *L) {
-    ecs_world_t **world_ud = (ecs_world_t **)luaL_checkudata(L, 1, ECS_WORLD_MT);
-    if (*world_ud) {
-        ecs_fini(*world_ud);
-        *world_ud = NULL;
+Position* check_position(lua_State *L, int idx) {
+    Position *pos = lua_newuserdata(L, sizeof(Position));
+    luaL_getmetatable(L, "Position");
+    lua_setmetatable(L, -2);
+    
+    lua_getfield(L, idx, "x");
+    pos->x = luaL_checknumber(L, -1);
+    lua_pop(L, 1);
+    
+    lua_getfield(L, idx, "y");
+    pos->y = luaL_checknumber(L, -1);
+    lua_pop(L, 1);
+    
+    return pos;
+}
+
+int push_velocity(lua_State *L, Velocity *vel) {
+    lua_newtable(L);
+    lua_pushnumber(L, vel->x);
+    lua_setfield(L, -2, "x");
+    lua_pushnumber(L, vel->y);
+    lua_setfield(L, -2, "y");
+    
+    luaL_getmetatable(L, "Velocity");
+    lua_setmetatable(L, -2);
+    return 1;
+}
+
+Velocity* check_velocity(lua_State *L, int idx) {
+    Velocity *vel = lua_newuserdata(L, sizeof(Velocity));
+    luaL_getmetatable(L, "Velocity");
+    lua_setmetatable(L, -2);
+    
+    lua_getfield(L, idx, "x");
+    vel->x = luaL_checknumber(L, -1);
+    lua_pop(L, 1);
+    
+    lua_getfield(L, idx, "y");
+    vel->y = luaL_checknumber(L, -1);
+    lua_pop(L, 1);
+    
+    return vel;
+}
+
+// Lua bindings
+static int l_init(lua_State *L) {
+    printf("check\n");
+    if (global_world) {
+        ecs_fini(global_world);
     }
-    return 0;
+    printf("init world\n");
+    global_world = ecs_init();
+    printf("lua_pushlightuserdata\n");
+    lua_pushlightuserdata(L, global_world);
+    printf("register_flecs_components\n");
+    register_flecs_components(global_world);
+    return 1;
 }
 
-static int lua_ecs_component_init_name(lua_State *L) {
-  ecs_world_t **world_ud = (ecs_world_t **)luaL_checkudata(L, 1, ECS_WORLD_MT);
-  ecs_world_t *world = *world_ud;
-  const char *type_name = luaL_checkstring(L, 2);
-
-  const FlecsComponentType *type = flecs_lua_get_component_type(type_name);
-  if (!type) {
-      return luaL_error(L, "Unknown component type: %s", type_name);
-  }
-
-  ecs_entity_t existing_id = ecs_lookup(world, type_name);
-  if (existing_id != 0) {
-      printf("Component '%s' already registered with ID: %llu\n", type_name, (unsigned long long)existing_id);
-  } else {
-      printf("Registering new component '%s':\n", type_name);
-  }
-
-  ecs_entity_t comp_id = ecs_component_init(world, &(ecs_component_desc_t){
-      .entity = ecs_entity(world, {.name = type_name}),
-      .type.size = type->size,
-      .type.alignment = type->alignment
-  });
-
-  char reg_key[32];
-  snprintf(reg_key, sizeof(reg_key), "Lua_%s_ID", type_name);
-  lua_pushinteger(L, comp_id);
-  lua_setfield(L, LUA_REGISTRYINDEX, reg_key);
-  return 0;
-}
-
-
-static int lua_ecs_component_init_velocity(lua_State *L) {
-  ecs_world_t **world_ud = (ecs_world_t **)luaL_checkudata(L, 1, ECS_WORLD_MT);
-  ecs_world_t *world = *world_ud;
-
-  l_velocity_t vel_buffer;
-  l_velocity_t *vel = (l_velocity_t *)flecs_lua_extract_cdata(L, 2, "l_velocity_t*", sizeof(l_velocity_t), &vel_buffer, "ecs_component_init_velocity");
-  if (!vel) {
-      return luaL_error(L, "Failed to extract l_velocity_t cdata");
-  }
-
-  ecs_entity_t existing_id = ecs_lookup(world, "l_velocity_t");
-  if (existing_id != 0) {
-      printf("Component 'l_velocity_t' already registered with ID: %llu\n", (unsigned long long)existing_id);
-  } else {
-      printf("Registering new component 'l_velocity_t':\n");
-  }
-
-  printf("Component Name: l_velocity_t\n");
-  printf("Type: l_velocity_t (size: %zu, alignment: %zu)\n", sizeof(l_velocity_t), ECS_ALIGNOF(l_velocity_t));
-  printf("Sample values: vx = %f, vy = %f\n", vel->vx, vel->vy);
-
-  ecs_entity_t comp_id = ecs_component_init(world, &(ecs_component_desc_t){
-      .entity = ecs_entity(world, {.name = "l_velocity_t"}),
-      .type.size = sizeof(l_velocity_t),
-      .type.alignment = ECS_ALIGNOF(l_velocity_t)
-  });
-
-  lua_pushinteger(L, comp_id);
-  lua_setfield(L, LUA_REGISTRYINDEX, "Lua_Velocity_ID");
-  return 0;
-}
-
-// Lua function: lua_ecs_set(world, entity, ffi_component)
-static int lua_ecs_set(lua_State *L) {
-  ecs_world_t **world_ud = (ecs_world_t **)luaL_checkudata(L, 1, ECS_WORLD_MT);
-  ecs_world_t *world = *world_ud;
-  ecs_entity_t entity = luaL_checkinteger(L, 2);
-  const char *type_name = luaL_checkstring(L, 3);
-
-  const FlecsComponentType *type = flecs_lua_get_component_type(type_name);
-  if (!type) {
-      return luaL_error(L, "Unknown component type: %s", type_name);
-  }
-
-  void *buffer = malloc(type->size);
-  if (!buffer) {
-      return luaL_error(L, "Failed to allocate memory for %s", type_name);
-  }
-
-  char type_name_ptr[32];
-  snprintf(type_name_ptr, sizeof(type_name_ptr), "%s*", type_name);
-  if (!flecs_lua_extract_cdata(L, 4, type_name_ptr, type->size, buffer, "ecs_set")) {
-      free(buffer);
-      return luaL_error(L, "Expected %s cdata", type_name);
-  }
-
-  char reg_key[32];
-  snprintf(reg_key, sizeof(reg_key), "Lua_%s_ID", type_name);
-  lua_getfield(L, LUA_REGISTRYINDEX, reg_key);
-  ecs_entity_t comp_id = lua_tointeger(L, -1);
-  lua_pop(L, 1);
-
-  printf("Setting %s component for entity %llu:\n", type_name, (unsigned long long)entity);
-  printf("Type: %s (size: %zu, alignment: %zu)\n", type_name, type->size, type->alignment);
-  if (strcmp(type_name, "l_point_t") == 0) {
-      l_point_t *point = (l_point_t *)buffer;
-      printf("Values: x = %f, y = %f\n", point->x, point->y);
-  } else if (strcmp(type_name, "l_velocity_t") == 0) {
-      l_velocity_t *vel = (l_velocity_t *)buffer;
-      printf("Values: vx = %f, vy = %f\n", vel->vx, vel->vy);
-  } else if (strcmp(type_name, "l_acceleration_t") == 0) {
-      l_acceleration_t *acc = (l_acceleration_t *)buffer;
-      DEBUG_PRINT("Values: ax = %f, ay = %f\n", acc->ax, acc->ay);
-  }
-
-  ecs_set_id(world, entity, comp_id, type->size, buffer);
-  free(buffer);
-  return 0;
-}
-
-
-// Lua function: lua_ecs_get(world, entity)
-static int lua_ecs_get(lua_State *L) {
-  ecs_world_t **world_ud = (ecs_world_t **)luaL_checkudata(L, 1, ECS_WORLD_MT);
-  ecs_world_t *world = *world_ud;
-  ecs_entity_t entity = luaL_checkinteger(L, 2);
-  const char *type_name = luaL_checkstring(L, 3);
-
-  const FlecsComponentType *type = flecs_lua_get_component_type(type_name);
-  if (!type) {
-      return luaL_error(L, "Unknown component type: %s", type_name);
-  }
-
-  char reg_key[32];
-  snprintf(reg_key, sizeof(reg_key), "Lua_%s_ID", type_name);
-  lua_getfield(L, LUA_REGISTRYINDEX, reg_key);
-  ecs_entity_t comp_id = lua_tointeger(L, -1);
-  lua_pop(L, 1);
-
-  const void *value = ecs_get_id(world, entity, comp_id);
-  if (!value) {
-      lua_pushnil(L);
-      return 1;
-  }
-
-  printf("Getting %s component for entity %llu:\n", type_name, (unsigned long long)entity);
-  printf("Type: %s (size: %zu, alignment: %zu)\n", type_name, type->size, type->alignment);
-  if (strcmp(type_name, "l_point_t") == 0) {
-      const l_point_t *point = (const l_point_t *)value;
-      printf("Values: x = %f, y = %f\n", point->x, point->y);
-  } else if (strcmp(type_name, "l_velocity_t") == 0) {
-      const l_velocity_t *vel = (const l_velocity_t *)value;
-      printf("Values: vx = %f, vy = %f\n", vel->vx, vel->vy);
-  }
-
-  lua_getglobal(L, "ffi");
-  lua_getfield(L, -1, "new");
-  lua_pushstring(L, type_name);
-  if (lua_pcall(L, 1, 1, 0) != LUA_OK) {
-      printf("FFI new error: %s\n", lua_tostring(L, -1));
-      luaL_error(L, "failed to create %s cdata", type_name);
-  }
-
-  lua_getglobal(L, "ffi");
-  lua_getfield(L, -1, "copy");
-  lua_pushvalue(L, -3);
-  lua_pushlightuserdata(L, (void *)value);
-  lua_pushinteger(L, type->size);
-  if (lua_pcall(L, 3, 0, 0) != LUA_OK) {
-      printf("FFI copy error: %s\n", lua_tostring(L, -1));
-      luaL_error(L, "failed to copy %s data", type_name);
-  }
-
-  lua_pop(L, 1);
-  return 1;
-}
-
-
-
-// Lua function: flecs.new_entity(world)
-static int l_flecs_new_entity(lua_State *L) {
-    ecs_world_t **world_ud = (ecs_world_t **)luaL_checkudata(L, 1, ECS_WORLD_MT);
-    ecs_world_t *world = *world_ud;
+static int l_ecs_new(lua_State *L) {
+    ecs_world_t *world = lua_touserdata(L, 1);
     ecs_entity_t e = ecs_new(world);
+    printf("Created entity: %llu\n", (unsigned long long)e);
     lua_pushinteger(L, e);
     return 1;
 }
 
-// Lua function: flecs.progress(world, delta_time)
-static int l_flecs_progress(lua_State *L) {
-    ecs_world_t **world_ud = (ecs_world_t **)luaL_checkudata(L, 1, ECS_WORLD_MT);
-    ecs_world_t *world = *world_ud;
-    float delta_time = (float)luaL_optnumber(L, 2, 0.0);
+static int l_progress(lua_State *L) {
+    ecs_world_t *world = lua_touserdata(L, 1);
+    float delta_time = luaL_optnumber(L, 2, 0.0f);
+    printf("Progressing world with delta_time: %.1f\n", delta_time);
     ecs_progress(world, delta_time);
     return 0;
 }
 
-// Lua function: flecs.list_registry()
-static int l_flecs_list_registry(lua_State *L) {
-    printf("Listing Lua registry contents:\n");
-    lua_pushvalue(L, LUA_REGISTRYINDEX);
-    lua_pushnil(L);
-    while (lua_next(L, -2) != 0) {
-        printf("Key: ");
-        switch (lua_type(L, -2)) {
-            case LUA_TNUMBER: printf("%g", lua_tonumber(L, -2)); break;
-            case LUA_TSTRING: printf("\"%s\"", lua_tostring(L, -2)); break;
-            case LUA_TLIGHTUSERDATA: printf("lightuserdata: %p", lua_touserdata(L, -2)); break;
-            case LUA_TTABLE: printf("table: %p", lua_topointer(L, -2)); break;
-            default: printf("%s: %p", lua_typename(L, lua_type(L, -2)), lua_topointer(L, -2)); break;
-        }
-        printf(", Value: ");
-        switch (lua_type(L, -1)) {
-            case LUA_TNUMBER: printf("%g", lua_tonumber(L, -1)); break;
-            case LUA_TSTRING: printf("\"%s\"", lua_tostring(L, -1)); break;
-            case LUA_TLIGHTUSERDATA: printf("lightuserdata: %p", lua_touserdata(L, -1)); break;
-            case LUA_TTABLE: printf("table: %p", lua_topointer(L, -1)); break;
-            case LUA_TUSERDATA: printf("userdata: %p", lua_touserdata(L, -1)); break;
-            default: printf("%s: %p", lua_typename(L, lua_type(L, -1)), lua_topointer(L, -1)); break;
-        }
-        printf("\n");
-        lua_pop(L, 1);
+static int l_set(lua_State *L) {
+    printf("set comp...\n");
+    ecs_world_t *world = lua_touserdata(L, 1);
+    ecs_entity_t e = lua_tointeger(L, 2);
+    const char *comp_name = luaL_checkstring(L, 3);
+    printf("name: %s\n", comp_name);
+    
+    if (strcmp(comp_name, "Position") == 0) {
+        Position *pos = check_position(L, 4);
+        ecs_set_id(world, e, PositionId, sizeof(Position), pos);
+        printf("Set Position on entity %llu: (%.1f, %.1f)\n", 
+               (unsigned long long)e, pos->x, pos->y);
+    } else if (strcmp(comp_name, "Velocity") == 0) {
+        Velocity *vel = check_velocity(L, 4);
+        ecs_set_id(world, e, VelocityId, sizeof(Velocity), vel);
+        printf("Set Velocity on entity %llu: (%.1f, %.1f)\n", 
+               (unsigned long long)e, vel->x, vel->y);
     }
-    lua_pop(L, 1);
+    
     return 0;
 }
 
-// Lua function: flecs.list_lua_types()
-static int l_flecs_list_lua_types(lua_State *L) {
-    lua_newtable(L);
-    lua_pushstring(L, "nil"); lua_pushinteger(L, LUA_TNIL); lua_settable(L, -3);
-    lua_pushstring(L, "number"); lua_pushinteger(L, LUA_TNUMBER); lua_settable(L, -3);
-    lua_pushstring(L, "boolean"); lua_pushinteger(L, LUA_TBOOLEAN); lua_settable(L, -3);
-    lua_pushstring(L, "string"); lua_pushinteger(L, LUA_TSTRING); lua_settable(L, -3);
-    lua_pushstring(L, "table"); lua_pushinteger(L, LUA_TTABLE); lua_settable(L, -3);
-    lua_pushstring(L, "function"); lua_pushinteger(L, LUA_TFUNCTION); lua_settable(L, -3);
-    lua_pushstring(L, "userdata"); lua_pushinteger(L, LUA_TUSERDATA); lua_settable(L, -3);
-    lua_pushstring(L, "thread"); lua_pushinteger(L, LUA_TTHREAD); lua_settable(L, -3);
-    lua_pushstring(L, "lightuserdata"); lua_pushinteger(L, LUA_TLIGHTUSERDATA); lua_settable(L, -3);
+static int l_get(lua_State *L) {
+    ecs_world_t *world = lua_touserdata(L, 1);
+    ecs_entity_t e = lua_tointeger(L, 2);
+    const char *comp_name = luaL_checkstring(L, 3);
+    
+    if (strcmp(comp_name, "Position") == 0) {
+        const Position *pos = ecs_get_id(world, e, PositionId);
+        if (pos) {
+            push_position(L, (Position*)pos);
+            printf("Get Position for entity %llu: (%.1f, %.1f)\n", 
+                   (unsigned long long)e, pos->x, pos->y);
+            return 1;
+        } else {
+            lua_pushnil(L);
+            printf("No Position found for entity %llu\n", (unsigned long long)e);
+            return 1;
+        }
+    } else if (strcmp(comp_name, "Velocity") == 0) {
+        const Velocity *vel = ecs_get_id(world, e, VelocityId);
+        if (vel) {
+            push_velocity(L, (Velocity*)vel);
+            printf("Get Velocity for entity %llu: (%.1f, %.1f)\n", 
+                   (unsigned long long)e, vel->x, vel->y);
+            return 1;
+        } else {
+            lua_pushnil(L);
+            printf("No Velocity found for entity %llu\n", (unsigned long long)e);
+            return 1;
+        }
+    }
+    
+    lua_pushnil(L);
     return 1;
 }
 
-// Table of functions to register with Lua
+static int l_component(lua_State *L) {
+    ecs_world_t *world = lua_touserdata(L, 1);
+    const char *name = luaL_checkstring(L, 2);
+    lua_pushstring(L, name);
+    return 1;
+}
+
+// Module registration
 static const luaL_Reg flecs_funcs[] = {
-    {"new_world", l_flecs_new_world},
-    {"delete_world", l_flecs_delete_world},
-    {"lua_ecs_component_init_name", lua_ecs_component_init_name},
-    {"lua_ecs_component_init_velocity", lua_ecs_component_init_velocity},
-    {"lua_ecs_set", lua_ecs_set},
-    {"lua_ecs_get", lua_ecs_get},
-    {"new_entity", l_flecs_new_entity},
-    {"progress", l_flecs_progress},
-    {"list_registry", l_flecs_list_registry},
-    {"list_lua_types", l_flecs_list_lua_types},
+    {"init", l_init},
+    {"ecs_new", l_ecs_new},
+    {"progress", l_progress},
+    {"set", l_set},
+    {"get", l_get},
+    {"component", l_component},
     {NULL, NULL}
 };
 
-// Entry point for the Lua module
-int luaopen_flecs(lua_State *L) {
+int luaopen_flecs_lua(lua_State *L) {
+    luaL_newmetatable(L, "Position");
+    lua_pop(L, 1);
+    luaL_newmetatable(L, "Velocity");
+    lua_pop(L, 1);
+    
     luaL_newlib(L, flecs_funcs);
     return 1;
 }

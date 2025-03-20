@@ -60,7 +60,9 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 
 # Add source files
 set(SOURCES
-    src/main.c
+    #src/main.c
+    #src/test.c
+    src/test_init.c
     src/flecs_lua.c
     #flecs_lua_ctypes.h
 )
