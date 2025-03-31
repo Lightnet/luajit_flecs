@@ -1,49 +1,40 @@
-cmake_minimum_required(VERSION 3.15)
-project(FlecsLuaProject C)
+cmake_minimum_required(VERSION 3.10)
+project(FlecsLuaTest C)
 
-# Set debug build by default
-if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
-endif()
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
 
-# Enable FetchContent
+# Enable FetchContent module
 include(FetchContent)
 
 # Fetch LuaJIT
 FetchContent_Declare(
     luajit
-    GIT_REPOSITORY https://github.com/openresty/luajit2.git
-    GIT_TAG v2.1-20250117
+    GIT_REPOSITORY https://github.com/openresty/luajit2.git  # Using openresty/luajit2 as per your original request
+    GIT_TAG v2.1-agentzh
 )
 FetchContent_MakeAvailable(luajit)
 
-# Define LuaJIT DLL and import library paths
-set(LUAJIT_DLL "${luajit_SOURCE_DIR}/src/lua51.dll")
-set(LUAJIT_LIB "${luajit_SOURCE_DIR}/src/lua51.lib")
+# Define LuaJIT paths
+set(LUAJIT_SRC_DIR ${luajit_SOURCE_DIR}/src)
+set(LUAJIT_LIB ${LUAJIT_SRC_DIR}/lua51.lib)
+set(LUAJIT_DLL ${LUAJIT_SRC_DIR}/lua51.dll)
+include_directories(${LUAJIT_SRC_DIR})
 
-# Ensure LuaJIT src directory exists and build DLL only if missing
-if(NOT EXISTS ${luajit_SOURCE_DIR}/src)
-    message(FATAL_ERROR "LuaJIT source directory not found: ${luajit_SOURCE_DIR}/src")
-endif()
+# Custom command to build LuaJIT with msvcbuild.bat in VS2022 environment
+add_custom_command(
+    OUTPUT ${LUAJIT_LIB} ${LUAJIT_DLL}
+    COMMAND cmd.exe /C " \"C:/Program Files/Microsoft Visual Studio/2022/Community/Common7/Tools/VsDevCmd.bat\" -arch=x64 && ${LUAJIT_SRC_DIR}/msvcbuild.bat"
+    WORKING_DIRECTORY ${LUAJIT_SRC_DIR}
+    DEPENDS ${luajit_SOURCE_DIR}/src/msvcbuild.bat
+    COMMENT "Building LuaJIT with msvcbuild.bat"
+)
 
-if(NOT EXISTS ${LUAJIT_DLL} OR NOT EXISTS ${LUAJIT_LIB})
-    message(STATUS "Building LuaJIT DLL...")
-    execute_process(
-        COMMAND cmd /c msvcbuild.bat dll
-        WORKING_DIRECTORY ${luajit_SOURCE_DIR}/src
-        RESULT_VARIABLE LUAJIT_BUILD_RESULT
-        OUTPUT_VARIABLE LUAJIT_BUILD_OUTPUT
-        ERROR_VARIABLE LUAJIT_BUILD_ERROR
-    )
-    if(NOT LUAJIT_BUILD_RESULT EQUAL 0)
-        message(FATAL_ERROR "Failed to build LuaJIT:\nOutput: ${LUAJIT_BUILD_OUTPUT}\nError: ${LUAJIT_BUILD_ERROR}")
-    endif()
-    if(NOT EXISTS ${LUAJIT_DLL} OR NOT EXISTS ${LUAJIT_LIB})
-        message(FATAL_ERROR "LuaJIT DLL or LIB not found after build: ${LUAJIT_DLL}, ${LUAJIT_LIB}")
-    endif()
-else()
-    message(STATUS "LuaJIT DLL and LIB already exist, skipping build.")
-endif()
+# Custom target to ensure LuaJIT is built
+add_custom_target(
+    BuildLuaJIT
+    DEPENDS ${LUAJIT_LIB} ${LUAJIT_DLL}
+)
 
 # Fetch Flecs
 FetchContent_Declare(
@@ -51,49 +42,34 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/SanderMertens/flecs.git
     GIT_TAG v4.0.4
 )
-set(BUILD_SHARED_LIBS ON CACHE BOOL "Build shared libraries" FORCE) # Force Flecs as DLL
 FetchContent_MakeAvailable(flecs)
 
-# Set C standard
-set(CMAKE_C_STANDARD 11)
-set(CMAKE_C_STANDARD_REQUIRED ON)
-
-# Add source files
-set(SOURCES
-    #src/main.c
-    #src/test.c
-    src/test_init.c
-    src/flecs_lua.c
-    #flecs_lua_ctypes.h
+# Add the main executable
+add_executable(flecs_lua_test 
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/main.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/flecs_lua.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/flecs_comps.c
+)
+target_include_directories(flecs_lua_test PUBLIC 
+    ${flecs_SOURCE_DIR}/include  # Flecs include directory
+    ${luajit_SOURCE_DIR}/src     # LuaJIT include directory
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(flecs_lua_test PRIVATE 
+    ${LUAJIT_LIB}               # Link against LuaJIT static library
+    flecs_static                # Link against Flecs static library
 )
 
-# Add include directories
-include_directories(
-    ${flecs_SOURCE_DIR}/include
-    ${luajit_SOURCE_DIR}/src
-    include
+# Ensure LuaJIT is built before the executable
+add_dependencies(flecs_lua_test BuildLuaJIT)
+
+# Post-build step to copy lua51.dll and script.lua to the output directory
+add_custom_command(TARGET flecs_lua_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${LUAJIT_DLL}
+        $<TARGET_FILE_DIR:flecs_lua_test>
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_CURRENT_SOURCE_DIR}/script.lua
+        $<TARGET_FILE_DIR:flecs_lua_test>
+    COMMENT "Copying lua51.dll and script.lua to output directory"
 )
-
-# Add executable
-add_executable(${PROJECT_NAME} ${SOURCES})
-
-# Link LuaJIT and Flecs as DLLs
-target_link_libraries(${PROJECT_NAME} PRIVATE
-    ${LUAJIT_LIB}  # Link against the import library
-    flecs          # Flecs shared library
-)
-
-# Ensure output directory exists and copy LuaJIT DLL
-set(OUTPUT_DIR $<TARGET_FILE_DIR:${PROJECT_NAME}>)
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${OUTPUT_DIR}
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${LUAJIT_DLL} ${OUTPUT_DIR}
-    COMMENT "Copying LuaJIT DLL to output directory"
-)
-
-# Ensure Flecs DLL is copied (if built in a different location)
-add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different $<TARGET_FILE:flecs> ${OUTPUT_DIR}
-    COMMENT "Copying Flecs DLL to output directory"
-)
-

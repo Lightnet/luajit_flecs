@@ -1,55 +1,64 @@
-#include <lua.h>
-#include <lauxlib.h>
-#include <lualib.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include "flecs.h"
+#include "lua.h"
+#include "lauxlib.h"
+#include "lualib.h"
+#include "flecs_lua.h"
 
-extern int luaopen_flecs_lua(lua_State *L);
-
-// Custom error handler for Lua
-static int lua_error_handler(lua_State *L) {
-    const char *msg = lua_tostring(L, -1);
-    printf("Lua Error: %s\n", msg ? msg : "Unknown error");
-    luaL_traceback(L, L, msg, 1);
-    printf("%s\n", lua_tostring(L, -1));
-    lua_pop(L, 2);
-    return 0;
+static void log_lua_error(lua_State *L, const char *filename) {
+    FILE *log = fopen("error.log", "a");
+    if (log) {
+        fprintf(log, "Lua error in %s: %s\n", filename, lua_tostring(L, -1));
+        fclose(log);
+    } else {
+        fprintf(stderr, "Failed to open error.log\n");
+    }
+    fprintf(stderr, "Lua error: %s\n", lua_tostring(L, -1));
 }
 
 int main(int argc, char *argv[]) {
+    const char *script_path = "script.lua";
+
+    if (argc > 1) {
+        script_path = argv[1];
+        const char *ext = strrchr(script_path, '.');
+        if (!ext || strcmp(ext, ".lua") != 0) {
+            fprintf(stderr, "Error: Script '%s' must have a .lua extension\n", script_path);
+            return 1;
+        }
+    }
+
+    printf("init lua\n");
     lua_State *L = luaL_newstate();
     if (!L) {
         fprintf(stderr, "Failed to create Lua state\n");
         return 1;
     }
-    
+    printf("init luaL_openlibs\n");
     luaL_openlibs(L);
-    
-    // Preload the flecs_lua module into package.preload
-    lua_getglobal(L, "package");
-    lua_getfield(L, -1, "preload");
-    lua_pushcfunction(L, luaopen_flecs_lua);
-    lua_setfield(L, -2, "flecs_lua");
-    lua_pop(L, 2); // Pop package.preload and package tables
 
-    // Push error handler onto stack
-    lua_pushcfunction(L, lua_error_handler);
-    int err_handler_idx = lua_gettop(L);
+    printf("init flecs_lua\n");
+    init_flecs_lua(L);
 
-    // Run the script
-    const char *script = (argc > 1) ? argv[1] : "main.lua";
-    if (luaL_loadfile(L, script) != LUA_OK) {
-        fprintf(stderr, "Error loading script '%s': %s\n", script, lua_tostring(L, -1));
-        lua_pop(L, 1);
+    printf("Loading script '%s'...\n", script_path);
+    if (luaL_loadfile(L, script_path) != LUA_OK) {
+        log_lua_error(L, script_path);
         lua_close(L);
         return 1;
     }
 
-    if (lua_pcall(L, 0, LUA_MULTRET, err_handler_idx) != LUA_OK) {
-        // Error already printed by lua_error_handler
+    printf("init lua_pcall\n");
+    int status = lua_pcall(L, 0, 0, 0);
+    if (status != LUA_OK) {
+        log_lua_error(L, script_path);
         lua_close(L);
         return 1;
     }
-    
+
+    printf("lua_close\n");
     lua_close(L);
+
+    printf("Test completed successfully.\n");
     return 0;
 }
