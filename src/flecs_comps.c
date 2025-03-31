@@ -1,4 +1,5 @@
 #include "flecs_comps.h"
+#include <string.h>
 
 // Component IDs
 ecs_entity_t PositionId = 0;
@@ -207,97 +208,172 @@ int lua_ecs_get(lua_State *L) {
     return 1;
 }
 
+
+
 // --- System Callback ---
 static void lua_system_callback(ecs_iter_t *it) {
-    lua_State *L = (lua_State *)ecs_get_ctx(it->world);
-    if (!L) return;
+  lua_State *L = (lua_State *)ecs_get_ctx(it->world);
+  if (!L) {
+      fprintf(stderr, "No Lua state in world context\n");
+      return;
+  }
+  printf("System callback invoked, entity count: %d\n", it->count);
 
-    // Retrieve the function reference from the system's context
-    lua_rawgeti(L, LUA_REGISTRYINDEX, (int)(intptr_t)it->ctx);
+  lua_rawgeti(L, LUA_REGISTRYINDEX, (int)(intptr_t)it->ctx);
+  if (!lua_isfunction(L, -1)) {
+      fprintf(stderr, "Callback is not a function\n");
+      lua_pop(L, 1);
+      return;
+  }
 
-    // Create an iterator table
-    lua_newtable(L);
+  lua_newtable(L);  // [func, it]
+  lua_pushnumber(L, it->delta_time);
+  lua_setfield(L, -2, "delta_time");
 
-    // Add delta_time
-    lua_pushnumber(L, it->delta_time);
-    lua_setfield(L, -2, "delta_time");
+  lua_getfield(L, LUA_REGISTRYINDEX, "flecs_world");
+  if (lua_isnil(L, -1)) {
+      fprintf(stderr, "flecs_world not found in registry\n");
+      lua_pop(L, 1);
+  } else {
+      lua_setfield(L, -2, "world");
+  }
 
-    // Add world from registry
-    lua_getfield(L, LUA_REGISTRYINDEX, "flecs_world");
-    lua_setfield(L, -2, "world");
+  lua_newtable(L);
+  for (int i = 0; i < it->count; i++) {
+      lua_pushinteger(L, i + 1);
+      lua_pushinteger(L, it->entities[i]);
+      lua_settable(L, -3);
+  }
+  lua_setfield(L, -2, "entities");
+  printf("Stack top after entities: %d\n", lua_gettop(L));  // Should be 2
 
-    // Populate entity IDs
-    lua_newtable(L);
-    for (int i = 0; i < it->count; i++) {
-        lua_pushinteger(L, i + 1);
-        lua_pushinteger(L, it->entities[i]);
-        lua_settable(L, -3);
-    }
-    lua_setfield(L, -2, "entities");
+  lua_rawgeti(L, LUA_REGISTRYINDEX, (int)(intptr_t)it->ctx + 1);
+  int num_components = lua_objlen(L, -1);
+  printf("Processing %d components\n", num_components);
 
-    // Populate Position components (index 0 in terms)
-    Position *positions = ecs_field(it, Position, 0);
-    lua_newtable(L);
-    for (int i = 0; i < it->count; i++) {
-        lua_pushinteger(L, i + 1);
-        ComponentPtr *cp = (ComponentPtr *)lua_newuserdata(L, sizeof(ComponentPtr));
-        cp->ptr = &positions[i];
-        cp->is_owned = 0;  // Flecs owns this memory
-        luaL_getmetatable(L, "Position");
-        lua_setmetatable(L, -2);
-        lua_settable(L, -3);
-    }
-    lua_setfield(L, -2, "Position");
+  for (int term = 0; term < num_components; term++) {
+      lua_rawgeti(L, -1, term + 1);
+      const char *comp_name = lua_tostring(L, -1);
+      printf("Component %d: %s\n", term, comp_name);
 
-    // Populate Velocity components (index 1 in terms)
-    Velocity *velocities = ecs_field(it, Velocity, 1);
-    lua_newtable(L);
-    for (int i = 0; i < it->count; i++) {
-        lua_pushinteger(L, i + 1);
-        ComponentPtr *cp = (ComponentPtr *)lua_newuserdata(L, sizeof(ComponentPtr));
-        cp->ptr = &velocities[i];
-        cp->is_owned = 0;  // Flecs owns this memory
-        luaL_getmetatable(L, "Velocity");
-        lua_setmetatable(L, -2);
-        lua_settable(L, -3);
-    }
-    lua_setfield(L, -2, "Velocity");
+      lua_newtable(L);
+      if (strcmp(comp_name, "Position") == 0) {
+          Position *positions = ecs_field(it, Position, term);
+          for (int i = 0; i < it->count; i++) {
+              lua_pushinteger(L, i + 1);
+              ComponentPtr *cp = (ComponentPtr *)lua_newuserdata(L, sizeof(ComponentPtr));
+              cp->ptr = &positions[i];
+              cp->is_owned = 0;
+              luaL_getmetatable(L, "Position");
+              lua_setmetatable(L, -2);
+              lua_settable(L, -3);
+          }
+      } else if (strcmp(comp_name, "Velocity") == 0) {
+          Velocity *velocities = ecs_field(it, Velocity, term);
+          for (int i = 0; i < it->count; i++) {
+              lua_pushinteger(L, i + 1);
+              ComponentPtr *cp = (ComponentPtr *)lua_newuserdata(L, sizeof(ComponentPtr));
+              cp->ptr = &velocities[i];
+              cp->is_owned = 0;
+              luaL_getmetatable(L, "Velocity");
+              lua_setmetatable(L, -2);
+              lua_settable(L, -3);
+          }
+      } else {
+          fprintf(stderr, "Unknown component in query: %s\n", comp_name);
+      }
+      lua_setfield(L, -4, comp_name);
+      lua_pop(L, 1);
+  }
+  printf("Stack top after components: %d\n", lua_gettop(L));
+  lua_pop(L, 1);
 
-    // Call the Lua function with the iterator table
-    if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
-        fprintf(stderr, "System error: %s\n", lua_tostring(L, -1));
-        lua_pop(L, 1);
-    }
+  printf("Calling Lua function with stack top: %d\n", lua_gettop(L));
+  if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+      fprintf(stderr, "System error: %s\n", lua_tostring(L, -1));
+      lua_pop(L, 1);
+  }
+  printf("System callback completed\n");
 }
 
 // --- System Binding ---
 int lua_ecs_system(lua_State *L) {
-    ecs_world_t *world = *(ecs_world_t**)luaL_checkudata(L, 1, "ecs_world");
-    luaL_checktype(L, 2, LUA_TFUNCTION);  // Ensure second arg is a function
-    const char *comp1 = luaL_checkstring(L, 3);
-    const char *comp2 = luaL_checkstring(L, 4);
+  ecs_world_t *world = *(ecs_world_t**)luaL_checkudata(L, 1, "ecs_world");
+  if (!world) {
+      fprintf(stderr, "Invalid world pointer\n");
+      return 0;
+  }
+  printf("World is valid\n");
 
-    // Store the Lua function in the registry and get a reference
-    lua_pushvalue(L, 2);  // Duplicate the function
-    int func_ref = luaL_ref(L, LUA_REGISTRYINDEX);  // Store in registry, get reference
+  luaL_checktype(L, 2, LUA_TFUNCTION);
+  const char *query_str = luaL_checkstring(L, 3);
+  printf("Registering system with query: %s\n", query_str);
 
-    // Define the system with both Position and Velocity
-    ecs_system_desc_t desc = {
-        .entity = ecs_entity(world, { 
-            .name = "LuaSystem",
-            .add = ecs_ids(ecs_dependson(EcsOnUpdate))
-        }),
-        .query.terms = {
-            { .id = PositionId },
-            { .id = VelocityId }
-        },
-        .callback = lua_system_callback,
-        .ctx = (void *)(intptr_t)func_ref
-    };
-    ecs_entity_t system = ecs_system_init(world, &desc);
+  lua_newtable(L);
+  int term_count = 0;
+  char *query_copy = strdup(query_str);
+  char *context = NULL;
+  char *token = strtok_s(query_copy, ", ", &context);
+  while (token != NULL) {
+      term_count++;
+      if (term_count > FLECS_TERM_COUNT_MAX) {
+          free(query_copy);
+          luaL_error(L, "Too many terms in query (max %d)", FLECS_TERM_COUNT_MAX);
+      }
+      lua_pushstring(L, token);
+      lua_rawseti(L, -2, term_count);
+      token = strtok_s(NULL, ", ", &context);
+  }
+  free(query_copy);
+  printf("Parsed %d terms\n", term_count);
 
-    return 0;
+  lua_pushvalue(L, 2);  // Duplicate the function
+  int func_ref = luaL_ref(L, LUA_REGISTRYINDEX);  // Store function
+  int comp_ref = luaL_ref(L, LUA_REGISTRYINDEX);  // Store component names table
+  printf("Function ref: %d, Component ref: %d\n", func_ref, comp_ref);
+
+  ecs_query_desc_t query_desc = {0};
+  lua_rawgeti(L, LUA_REGISTRYINDEX, comp_ref);
+  for (int i = 0; i < term_count; i++) {
+      lua_rawgeti(L, -1, i + 1);
+      const char *comp_name = lua_tostring(L, -1);
+      printf("Term %d: %s\n", i, comp_name);
+      if (strcmp(comp_name, "Position") == 0) {
+          query_desc.terms[i].id = PositionId;
+      } else if (strcmp(comp_name, "Velocity") == 0) {
+          query_desc.terms[i].id = VelocityId;
+      } else {
+          luaL_error(L, "Unknown component in query: %s", comp_name);
+      }
+      lua_pop(L, 1);
+  }
+  lua_pop(L, 1);
+  printf("Query terms populated\n");
+
+  ecs_system_desc_t desc = {
+      .entity = 0,
+      .query = query_desc,
+      .callback = lua_system_callback,
+      .ctx = (void *)(intptr_t)func_ref
+  };
+  printf("System descriptor prepared\n");
+
+  ecs_entity_t system = ecs_system_init(world, &desc);
+  if (system == 0) {
+      fprintf(stderr, "Failed to initialize system\n");
+      return 0;
+  }
+  ecs_add_id(world, system, ecs_dependson(EcsOnUpdate));
+  printf("System registered with entity ID: %lu\n", (unsigned long)system);
+
+  // Store the component table directly at func_ref + 1
+  lua_rawgeti(L, LUA_REGISTRYINDEX, comp_ref);  // Retrieve the table
+  lua_rawseti(L, LUA_REGISTRYINDEX, func_ref + 1);  // Store it at func_ref + 1
+  printf("System setup complete\n");
+
+  return 0;
 }
+
 
 void register_flecs_components(ecs_world_t *world) {
     printf("Registering components with Flecs\n");
@@ -311,4 +387,5 @@ void register_flecs_components(ecs_world_t *world) {
         .type.size = sizeof(Velocity),
         .type.alignment = ECS_ALIGNOF(Velocity)
     });
+    printf("PositionId: %lu, VelocityId: %lu\n", (unsigned long)PositionId, (unsigned long)VelocityId);
 }

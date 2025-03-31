@@ -22,7 +22,7 @@ vel.x = 5.0
 ecs.set(world, entity, vel)
 print("Set Velocity x: " .. vel.x)
 
--- Define a system
+-- Define a system with dynamic query
 function test(it)
     for i, entity in ipairs(it.entities) do
         local p = it.Position[i]
@@ -37,7 +37,7 @@ function test(it)
     end
 end
 
-ecs.ecs_system(world, test, "Position", "Velocity")
+ecs.ecs_system(world, test, "Position, Velocity")
 
 -- Run the world for 5 frames with 0.1s delta time
 for i = 1, 5 do

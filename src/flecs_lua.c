@@ -28,7 +28,7 @@ static int lua_ecs_new_world(lua_State *L) {
     // Store the world userdata in the registry
     lua_pushvalue(L, -1);  // Duplicate the world userdata
     lua_setfield(L, LUA_REGISTRYINDEX, "flecs_world");  // Store as "flecs_world"
-
+    //lua_pop(L, 2);//? here?
     return 1;
 }
 
