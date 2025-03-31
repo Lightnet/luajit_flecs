@@ -28,6 +28,6 @@ int lua_ecs_new(lua_State *L);
 int lua_ecs_check_type(lua_State *L);
 int lua_ecs_set(lua_State *L);
 int lua_ecs_get(lua_State *L);
-int lua_ecs_system(lua_State *L);  // New: system binding
+int lua_ecs_system(lua_State *L);
 
 #endif // FLECS_COMPS_H

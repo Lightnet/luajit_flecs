@@ -185,6 +185,10 @@ static void lua_system_callback(ecs_iter_t *it) {
     // Create an iterator table
     lua_newtable(L);
 
+    // Add delta_time
+    lua_pushnumber(L, it->delta_time);
+    lua_setfield(L, -2, "delta_time");
+
     // Populate entity IDs
     lua_newtable(L);
     for (int i = 0; i < it->count; i++) {
@@ -226,11 +230,64 @@ static void lua_system_callback(ecs_iter_t *it) {
     }
     lua_setfield(L, -2, "Velocity");
 
-    // Call the Lua function with the iterator table
-    if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
+    // Call the Lua function with the iterator table, expecting a table of updates
+    if (lua_pcall(L, 1, 1, 0) != LUA_OK) {
         fprintf(stderr, "System error: %s\n", lua_tostring(L, -1));
         lua_pop(L, 1);
+        return;
     }
+
+    // Process returned updates
+    if (lua_istable(L, -1)) {
+        for (int i = 0; i < it->count; i++) {
+            ecs_entity_t entity = it->entities[i];
+
+            // Check for Position updates
+            lua_getfield(L, -1, "Position");
+            if (lua_istable(L, -1)) {
+                lua_pushinteger(L, i + 1);
+                lua_gettable(L, -2);
+                if (lua_istable(L, -1)) {
+                    Position pos = positions[i];
+                    lua_getfield(L, -1, "x");
+                    if (!lua_isnil(L, -1)) pos.x = (float)lua_tonumber(L, -1);
+                    lua_pop(L, 1);
+                    lua_getfield(L, -1, "y");
+                    if (!lua_isnil(L, -1)) pos.y = (float)lua_tonumber(L, -1);
+                    lua_pop(L, 1);
+                    lua_getfield(L, -1, "z");
+                    if (!lua_isnil(L, -1)) pos.z = (float)lua_tonumber(L, -1);
+                    lua_pop(L, 1);
+                    ecs_set_id(it->world, entity, PositionId, sizeof(Position), &pos);
+                }
+                lua_pop(L, 1);
+            }
+            lua_pop(L, 1);
+
+            // Check for Velocity updates
+            lua_getfield(L, -1, "Velocity");
+            if (lua_istable(L, -1)) {
+                lua_pushinteger(L, i + 1);
+                lua_gettable(L, -2);
+                if (lua_istable(L, -1)) {
+                    Velocity vel = velocities[i];
+                    lua_getfield(L, -1, "x");
+                    if (!lua_isnil(L, -1)) vel.x = (float)lua_tonumber(L, -1);
+                    lua_pop(L, 1);
+                    lua_getfield(L, -1, "y");
+                    if (!lua_isnil(L, -1)) vel.y = (float)lua_tonumber(L, -1);
+                    lua_pop(L, 1);
+                    lua_getfield(L, -1, "z");
+                    if (!lua_isnil(L, -1)) vel.z = (float)lua_tonumber(L, -1);
+                    lua_pop(L, 1);
+                    ecs_set_id(it->world, entity, VelocityId, sizeof(Velocity), &vel);
+                }
+                lua_pop(L, 1);
+            }
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);  // Remove returned table
 }
 
 // --- System Binding ---
@@ -248,14 +305,14 @@ int lua_ecs_system(lua_State *L) {
     ecs_system_desc_t desc = {
         .entity = ecs_entity(world, { 
             .name = "LuaSystem",
-            .add = ecs_ids(ecs_dependson(EcsOnUpdate))  // Run on update
+            .add = ecs_ids(ecs_dependson(EcsOnUpdate))
         }),
-        .query.terms = {  // v4.x
+        .query.terms = {
             { .id = PositionId },
             { .id = VelocityId }
         },
         .callback = lua_system_callback,
-        .ctx = (void *)(intptr_t)func_ref  // Store function reference as context
+        .ctx = (void *)(intptr_t)func_ref
     };
     ecs_entity_t system = ecs_system_init(world, &desc);
 
