@@ -24,21 +24,17 @@ print("Set Velocity x: " .. vel.x)
 
 -- Define a system
 function test(it)
-    local updates = {}
-    updates.Position = {}
     for i, entity in ipairs(it.entities) do
         local p = it.Position[i]
         local v = it.Velocity[i]
         print("Entity " .. entity .. ": Pos x=" .. p.x .. ", Vel x=" .. v.x)
-        
-        -- Update Position based on Velocity and delta_time
-        updates.Position[i] = {
-            x = p.x + v.x * it.delta_time,
-            y = p.y + v.y * it.delta_time,
-            z = p.z + v.z * it.delta_time
-        }
+        -- Create a new Position component with updated values
+        local new_pos = ecs.new("Position")
+        new_pos.x = p.x + v.x * it.delta_time
+        new_pos.y = p.y + v.y * it.delta_time
+        new_pos.z = p.z + v.z * it.delta_time
+        ecs.set(it.world, entity, new_pos)
     end
-    return updates
 end
 
 ecs.ecs_system(world, test, "Position", "Velocity")

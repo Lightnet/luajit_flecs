@@ -16,6 +16,12 @@ typedef struct {
     float x, y, z;
 } Velocity;
 
+// Userdata wrapper for pointers
+typedef struct {
+    void *ptr;  // Pointer to Position or Velocity data
+    int is_owned;  // 1 if we own the memory (temp buffer), 0 if Flecs does
+} ComponentPtr;
+
 // Component IDs
 extern ecs_entity_t PositionId;
 extern ecs_entity_t VelocityId;
@@ -23,7 +29,7 @@ extern ecs_entity_t VelocityId;
 // Register components with Flecs and set IDs
 void register_flecs_components(ecs_world_t *world);
 
-// Lua binding functions (exposed for use in flecs_lua.c)
+// Lua binding functions
 int lua_ecs_new(lua_State *L);
 int lua_ecs_check_type(lua_State *L);
 int lua_ecs_set(lua_State *L);

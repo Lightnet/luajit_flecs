@@ -6,7 +6,8 @@ ecs_entity_t VelocityId = 0;
 
 // --- Position Bindings ---
 static int lua_position_index(lua_State *L) {
-    Position *pos = (Position *)luaL_checkudata(L, 1, "Position");
+    ComponentPtr *cp = (ComponentPtr *)luaL_checkudata(L, 1, "Position");
+    Position *pos = (Position *)cp->ptr;
     const char *field = luaL_checkstring(L, 2);
     if (strcmp(field, "x") == 0) {
         lua_pushnumber(L, pos->x);
@@ -21,7 +22,8 @@ static int lua_position_index(lua_State *L) {
 }
 
 static int lua_position_newindex(lua_State *L) {
-    Position *pos = (Position *)luaL_checkudata(L, 1, "Position");
+    ComponentPtr *cp = (ComponentPtr *)luaL_checkudata(L, 1, "Position");
+    Position *pos = (Position *)cp->ptr;
     const char *field = luaL_checkstring(L, 2);
     float value = (float)luaL_checknumber(L, 3);
     if (strcmp(field, "x") == 0) {
@@ -36,9 +38,18 @@ static int lua_position_newindex(lua_State *L) {
     return 0;
 }
 
+static int lua_position_gc(lua_State *L) {
+    ComponentPtr *cp = (ComponentPtr *)luaL_checkudata(L, 1, "Position");
+    if (cp->is_owned) {
+        free(cp->ptr);
+    }
+    return 0;
+}
+
 // --- Velocity Bindings ---
 static int lua_velocity_index(lua_State *L) {
-    Velocity *vel = (Velocity *)luaL_checkudata(L, 1, "Velocity");
+    ComponentPtr *cp = (ComponentPtr *)luaL_checkudata(L, 1, "Velocity");
+    Velocity *vel = (Velocity *)cp->ptr;
     const char *field = luaL_checkstring(L, 2);
     if (strcmp(field, "x") == 0) {
         lua_pushnumber(L, vel->x);
@@ -53,7 +64,8 @@ static int lua_velocity_index(lua_State *L) {
 }
 
 static int lua_velocity_newindex(lua_State *L) {
-    Velocity *vel = (Velocity *)luaL_checkudata(L, 1, "Velocity");
+    ComponentPtr *cp = (ComponentPtr *)luaL_checkudata(L, 1, "Velocity");
+    Velocity *vel = (Velocity *)cp->ptr;
     const char *field = luaL_checkstring(L, 2);
     float value = (float)luaL_checknumber(L, 3);
     if (strcmp(field, "x") == 0) {
@@ -68,12 +80,24 @@ static int lua_velocity_newindex(lua_State *L) {
     return 0;
 }
 
+static int lua_velocity_gc(lua_State *L) {
+    ComponentPtr *cp = (ComponentPtr *)luaL_checkudata(L, 1, "Velocity");
+    if (cp->is_owned) {
+        free(cp->ptr);
+    }
+    return 0;
+}
+
 // --- Unified Constructor ---
 int lua_ecs_new(lua_State *L) {
     const char *type = luaL_checkstring(L, 1);
+    ComponentPtr *cp;
 
     if (strcmp(type, "Position") == 0) {
-        Position *pos = (Position *)lua_newuserdata(L, sizeof(Position));
+        cp = (ComponentPtr *)lua_newuserdata(L, sizeof(ComponentPtr));
+        cp->ptr = malloc(sizeof(Position));
+        cp->is_owned = 1;
+        Position *pos = (Position *)cp->ptr;
         pos->x = 0.0f;
         pos->y = 0.0f;
         pos->z = 0.0f;
@@ -86,10 +110,15 @@ int lua_ecs_new(lua_State *L) {
             lua_setfield(L, -2, "__index");
             lua_pushcfunction(L, lua_position_newindex);
             lua_setfield(L, -2, "__newindex");
+            lua_pushcfunction(L, lua_position_gc);
+            lua_setfield(L, -2, "__gc");
         }
         lua_setmetatable(L, -2);
     } else if (strcmp(type, "Velocity") == 0) {
-        Velocity *vel = (Velocity *)lua_newuserdata(L, sizeof(Velocity));
+        cp = (ComponentPtr *)lua_newuserdata(L, sizeof(ComponentPtr));
+        cp->ptr = malloc(sizeof(Velocity));
+        cp->is_owned = 1;
+        Velocity *vel = (Velocity *)cp->ptr;
         vel->x = 0.0f;
         vel->y = 0.0f;
         vel->z = 0.0f;
@@ -102,6 +131,8 @@ int lua_ecs_new(lua_State *L) {
             lua_setfield(L, -2, "__index");
             lua_pushcfunction(L, lua_velocity_newindex);
             lua_setfield(L, -2, "__newindex");
+            lua_pushcfunction(L, lua_velocity_gc);
+            lua_setfield(L, -2, "__gc");
         }
         lua_setmetatable(L, -2);
     } else {
@@ -129,12 +160,12 @@ int lua_ecs_check_type(lua_State *L) {
 int lua_ecs_set(lua_State *L) {
     ecs_world_t *world = *(ecs_world_t**)luaL_checkudata(L, 1, "ecs_world");
     ecs_entity_t entity = (ecs_entity_t)luaL_checkinteger(L, 2);
-    void *component = lua_touserdata(L, 3);
+    ComponentPtr *cp = (ComponentPtr *)lua_touserdata(L, 3);
 
     if (luaL_testudata(L, 3, "Position")) {
-        ecs_set_id(world, entity, PositionId, sizeof(Position), component);
+        ecs_set_id(world, entity, PositionId, sizeof(Position), cp->ptr);
     } else if (luaL_testudata(L, 3, "Velocity")) {
-        ecs_set_id(world, entity, VelocityId, sizeof(Velocity), component);
+        ecs_set_id(world, entity, VelocityId, sizeof(Velocity), cp->ptr);
     } else {
         luaL_error(L, "Invalid component type for ecs.set");
     }
@@ -149,19 +180,21 @@ int lua_ecs_get(lua_State *L) {
     const char *type = luaL_checkstring(L, 3);
 
     if (strcmp(type, "Position") == 0) {
-        const Position *pos = ecs_get_id(world, entity, PositionId);
+        Position *pos = (Position *)ecs_get_id(world, entity, PositionId);
         if (pos) {
-            Position *new_pos = (Position *)lua_newuserdata(L, sizeof(Position));
-            *new_pos = *pos;
+            ComponentPtr *cp = (ComponentPtr *)lua_newuserdata(L, sizeof(ComponentPtr));
+            cp->ptr = pos;
+            cp->is_owned = 0;  // Flecs owns this memory
             luaL_getmetatable(L, "Position");
             lua_setmetatable(L, -2);
             return 1;
         }
     } else if (strcmp(type, "Velocity") == 0) {
-        const Velocity *vel = ecs_get_id(world, entity, VelocityId);
+        Velocity *vel = (Velocity *)ecs_get_id(world, entity, VelocityId);
         if (vel) {
-            Velocity *new_vel = (Velocity *)lua_newuserdata(L, sizeof(Velocity));
-            *new_vel = *vel;
+            ComponentPtr *cp = (ComponentPtr *)lua_newuserdata(L, sizeof(ComponentPtr));
+            cp->ptr = vel;
+            cp->is_owned = 0;  // Flecs owns this memory
             luaL_getmetatable(L, "Velocity");
             lua_setmetatable(L, -2);
             return 1;
@@ -189,6 +222,10 @@ static void lua_system_callback(ecs_iter_t *it) {
     lua_pushnumber(L, it->delta_time);
     lua_setfield(L, -2, "delta_time");
 
+    // Add world from registry
+    lua_getfield(L, LUA_REGISTRYINDEX, "flecs_world");
+    lua_setfield(L, -2, "world");
+
     // Populate entity IDs
     lua_newtable(L);
     for (int i = 0; i < it->count; i++) {
@@ -203,13 +240,11 @@ static void lua_system_callback(ecs_iter_t *it) {
     lua_newtable(L);
     for (int i = 0; i < it->count; i++) {
         lua_pushinteger(L, i + 1);
-        lua_newtable(L);
-        lua_pushnumber(L, positions[i].x);
-        lua_setfield(L, -2, "x");
-        lua_pushnumber(L, positions[i].y);
-        lua_setfield(L, -2, "y");
-        lua_pushnumber(L, positions[i].z);
-        lua_setfield(L, -2, "z");
+        ComponentPtr *cp = (ComponentPtr *)lua_newuserdata(L, sizeof(ComponentPtr));
+        cp->ptr = &positions[i];
+        cp->is_owned = 0;  // Flecs owns this memory
+        luaL_getmetatable(L, "Position");
+        lua_setmetatable(L, -2);
         lua_settable(L, -3);
     }
     lua_setfield(L, -2, "Position");
@@ -219,75 +254,20 @@ static void lua_system_callback(ecs_iter_t *it) {
     lua_newtable(L);
     for (int i = 0; i < it->count; i++) {
         lua_pushinteger(L, i + 1);
-        lua_newtable(L);
-        lua_pushnumber(L, velocities[i].x);
-        lua_setfield(L, -2, "x");
-        lua_pushnumber(L, velocities[i].y);
-        lua_setfield(L, -2, "y");
-        lua_pushnumber(L, velocities[i].z);
-        lua_setfield(L, -2, "z");
+        ComponentPtr *cp = (ComponentPtr *)lua_newuserdata(L, sizeof(ComponentPtr));
+        cp->ptr = &velocities[i];
+        cp->is_owned = 0;  // Flecs owns this memory
+        luaL_getmetatable(L, "Velocity");
+        lua_setmetatable(L, -2);
         lua_settable(L, -3);
     }
     lua_setfield(L, -2, "Velocity");
 
-    // Call the Lua function with the iterator table, expecting a table of updates
-    if (lua_pcall(L, 1, 1, 0) != LUA_OK) {
+    // Call the Lua function with the iterator table
+    if (lua_pcall(L, 1, 0, 0) != LUA_OK) {
         fprintf(stderr, "System error: %s\n", lua_tostring(L, -1));
         lua_pop(L, 1);
-        return;
     }
-
-    // Process returned updates
-    if (lua_istable(L, -1)) {
-        for (int i = 0; i < it->count; i++) {
-            ecs_entity_t entity = it->entities[i];
-
-            // Check for Position updates
-            lua_getfield(L, -1, "Position");
-            if (lua_istable(L, -1)) {
-                lua_pushinteger(L, i + 1);
-                lua_gettable(L, -2);
-                if (lua_istable(L, -1)) {
-                    Position pos = positions[i];
-                    lua_getfield(L, -1, "x");
-                    if (!lua_isnil(L, -1)) pos.x = (float)lua_tonumber(L, -1);
-                    lua_pop(L, 1);
-                    lua_getfield(L, -1, "y");
-                    if (!lua_isnil(L, -1)) pos.y = (float)lua_tonumber(L, -1);
-                    lua_pop(L, 1);
-                    lua_getfield(L, -1, "z");
-                    if (!lua_isnil(L, -1)) pos.z = (float)lua_tonumber(L, -1);
-                    lua_pop(L, 1);
-                    ecs_set_id(it->world, entity, PositionId, sizeof(Position), &pos);
-                }
-                lua_pop(L, 1);
-            }
-            lua_pop(L, 1);
-
-            // Check for Velocity updates
-            lua_getfield(L, -1, "Velocity");
-            if (lua_istable(L, -1)) {
-                lua_pushinteger(L, i + 1);
-                lua_gettable(L, -2);
-                if (lua_istable(L, -1)) {
-                    Velocity vel = velocities[i];
-                    lua_getfield(L, -1, "x");
-                    if (!lua_isnil(L, -1)) vel.x = (float)lua_tonumber(L, -1);
-                    lua_pop(L, 1);
-                    lua_getfield(L, -1, "y");
-                    if (!lua_isnil(L, -1)) vel.y = (float)lua_tonumber(L, -1);
-                    lua_pop(L, 1);
-                    lua_getfield(L, -1, "z");
-                    if (!lua_isnil(L, -1)) vel.z = (float)lua_tonumber(L, -1);
-                    lua_pop(L, 1);
-                    ecs_set_id(it->world, entity, VelocityId, sizeof(Velocity), &vel);
-                }
-                lua_pop(L, 1);
-            }
-            lua_pop(L, 1);
-        }
-    }
-    lua_pop(L, 1);  // Remove returned table
 }
 
 // --- System Binding ---
